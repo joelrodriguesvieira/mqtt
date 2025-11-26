@@ -1,0 +1,23 @@
+# Arquivos de Build/Compilação e Lixo
+/build/
+/build_log.txt
+/sdkconfig
+/sdkconfig.old
+/flasher_args.json
+
+# Logs e Dados de Sessão
+*.log
+*.elf
+*.bin
+*.map
+*.hex
+*.gz
+*.tar
+*.zip
+
+# Arquivos de IDE (VSCode, Eclipse, etc.)
+.vscode/
+.idea/
+.settings/
+.project
+.cproject
