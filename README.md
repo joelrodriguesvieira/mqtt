@@ -1,147 +1,152 @@
-# Atividade: Acender LED do Esp32 via MQTT
+# Comunicação Bidirecional MQTT com ESP32
 
-## Membros da equipe
-* *Joel Rodrigues*
-* *Ian Pessoa*
-* *Fagner Timoteo*
-* *Enzo Albuquerque*
+Este projeto implementa um sistema de comunicação **Full-Duplex** entre dois dispositivos ESP32. O objetivo é o espelhamento de estado: um botão pressionado na **Placa A** acende o LED na **Placa B**, e vice-versa.
+
+## 👥 Membros da Equipe
+* **Joel Rodrigues**
+* **Ian Pessoa**
+* **Fagner Timoteo**
+* **Enzo Albuquerque**
 
 ---
 
-## Entendendo o código
-O código implementa a lógica para controlar um LED em um ESP32 e responder a um botão nele conectado, utilizando o protocolo MQTT para comunicação. O objetivo é permitir que o pressionamento de um botão em uma placa controle o LED de outra (ou de um cliente MQTT externo), e vice-versa, replicando o estado instantaneamente.
+## 🔗 Repositório Complementar
 
-O projeto utiliza o *ESP-IDF* e a biblioteca *ESP-MQTT*.
+⚠️ **ATENÇÃO:** Este repositório contém o código para a **Placa A**.
+
+Para o sistema funcionar completamente com dois ESP32, você precisa gravar o código complementar na segunda placa.
+* **Acesse o repositório da Placa B aqui:** https://github.com/enzo-gois/Acender-LED-do-ESP32-via-MQTT-placa-B
+
+---
+
+## 🧠 Entendendo o Código
+
+O código implementa a lógica para controlar um LED em um ESP32 e responder a um botão nele conectado, utilizando o protocolo MQTT para comunicação.
+O projeto utiliza o **ESP-IDF** e a biblioteca **ESP-MQTT**.
 
 ### Variáveis e Constantes
 De início, criamos variáveis importantes que definem o comportamento do hardware e da conexão:
 
-```
+```c
 #define TAG "MQTT_LED"
 #define BROKER_URI "mqtt://192.168.3.6:1883" 
 #define LED_GPIO     23
-#define BUTTON_GPIO  0 
+#define BUTTON_GPIO  22 
 
-static bool led_on = false;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
-
 ```
-* *TAG:* Constante usada para identificar os logs no terminal referentes a conexao do sistema.
-* *BROKER_URI:* Endereço IP do broker + porta. É o servidor responsável por receber e distribuir as mensagens.
-* *LED_GPIO e BUTTON_GPIO:* Constantes que definem os pinos físicos utilizados no ESP32.
-* *led_on:* Variável de estado que controla logicamente se o LED deve estar aceso ou apagado.
-* *esp_mqtt_client_handle_t mqtt_client:* Variável que gerencia a sessão e conexão do cliente MQTT.
+
+* **TAG:** Constante usada para identificar os logs no terminal referentes à conexão do sistema.
+* **BROKER_URI:** Endereço IP do broker + porta. É o servidor responsável por receber e distribuir as mensagens.
+* **LED_GPIO e BUTTON_GPIO:** Constantes que definem os pinos físicos utilizados no ESP32.
+* **mqtt_client:** Variável que gerencia a sessão e conexão do cliente MQTT.
 
 ---
 
-### Lógica do Cliente MQTT (```mqtt_event_handler_cb```)
-Esta função é o "cérebro" da comunicação. Ela opera como uma máquina de estados baseada nos eventos da rede:
+### Lógica do Cliente MQTT (`mqtt_event_handler_cb`)
+Esta função é o "cérebro" da recepção de dados. Ela opera como uma máquina de estados baseada nos eventos da rede:
 
-1. *Conexão Estabelecida (MQTT_EVENT_CONNECTED):*
-   * O ESP32 se inscreve no tópico esp32/led para receber comandos de luz.
-   * O ESP32 se inscreve no tópico esp32/button para saber quando botões são pressionados na rede.
+1. **Conexão Estabelecida (`MQTT_EVENT_CONNECTED`):**
+   * O ESP32 se inscreve no tópico da **outra placa** (ex: `esp32/tp1`) para escutar comandos.
 
-2. *Dados Recebidos (MQTT_EVENT_DATA):*
-   * *Controle do LED:* Se chegar a mensagem "on" ou "off" no tópico esp32/led, o pino físico é alterado imediatamente.
-   * *Monitoramento do Botão:*
-     * Ao receber led_on no tópico esp32/button, o sistema registra a pendência e o timestamp.
-     * Ao receber led_off no tópico esp32/button, o sistema entende que o botão foi solto e envia o comando para desligar o LED.
+2. **Dados Recebidos (`MQTT_EVENT_DATA`):**
+   * O sistema verifica se a mensagem chegou no tópico esperado.
+   * **Controle do LED:**
+     * Se chegar a mensagem **"off"**: O código entende que o botão da outra placa foi pressionado (lógica pull-up) e **Acende o LED** (`gpio_set_level 1`).
+     * Se chegar a mensagem **"on"**: O código entende que o botão foi solto e **Apaga o LED** (`gpio_set_level 0`).
 
 ---
 
 ### Tasks do FreeRTOS
-Para garantir que o sistema não trave esperando o botão ou a rede, utilizamos duas tarefas rodando em paralelo:
+Para garantir que o sistema não trave esperando o botão ou a rede, utilizamos uma tarefa dedicada rodando em paralelo:
 
-#### 1. Task de Leitura (```button_task```)
-Responsável apenas por olhar o hardware.
-* Lê o estado do pino (definido em BUTTON_GPIO).
-* Quando detecta "pressionado", publica a mensagem led_on no tópico esp32/button.
-* Quando detecta "solto", publica a mensagem led_off.
-
-#### 2. Task de Interpretação (```button_interpreter_task```)
-Responsável pela lógica temporal.
-* Monitora se existe uma ação de botão pendente (button_pending_on).
-* Valida o tempo decorrido e publica a mensagem definitiva on no tópico esp32/led para acender efetivamente as luzes.
+#### Task de Leitura (`button_task`)
+Responsável apenas por monitorar o hardware (Botão Local).
+1. Lê continuamente o estado do pino `BUTTON_GPIO`.
+2. Detecta mudanças de estado (se estava solto e foi apertado, ou vice-versa).
+3. **Publicação:** Assim que o estado muda, ela publica imediatamente a mensagem ("on" ou "off") no tópico de saída desta placa (ex: `esp32/tp2`), avisando a rede que houve uma ação.
 
 ---
 
-### Função Principal (```app_main```)
+### Função Principal (`app_main`)
 É o ponto de entrada da aplicação, responsável pela inicialização de todos os componentes:
-1. *Inicialização do Sistema:* Configura o NVS (necessário para o Wi-Fi), as interfaces de rede e o loop de eventos padrão.
-2. *Conexão Wi-Fi:* Chama a função example_connect() que utiliza as credenciais configuradas no menuconfig para conectar à rede.
-3. *Configuração de GPIO:* Define o pino do LED como saída e o do botão como entrada (ativando o resistor de pull-up interno).
-4. *Início do MQTT:* Configura a URI do broker e inicia o cliente MQTT.
-5. *Criação das Tasks:* Cria as tasks button_task e button_interpreter_task para rodarem simultaneamente, alocando a memória necessária para elas.
+
+1. **Inicialização do Sistema:** Configura o NVS (necessário para o Wi-Fi), as interfaces de rede e o loop de eventos padrão.
+2. **Conexão Wi-Fi:** Chama a função `example_connect()` que utiliza as credenciais configuradas no `menuconfig` para conectar à rede.
+3. **Configuração de GPIO:** Define o pino do LED como saída e o do botão como entrada (ativando o resistor de pull-up interno).
+4. **Início do MQTT:** Configura a URI do broker e inicia o cliente MQTT.
+5. **Criação das Tasks:** Cria a task `button_task` para rodar simultaneamente com a comunicação Wi-Fi.
 
 ---
 
-## Configuração do Broker MQTT (Essencial)
-Para que os dois ESP32 (ou o ESP32 e o PC) conversem, é necessário configurar o endereço do servidor e liberar o acesso externo no PC:
+## ⚙️ Configuração do Ambiente (Essencial)
 
-1. *Configurar o Mosquitto (Permitir acesso externo):*
-   * Vá à pasta de instalação (ex: C:\Program Files\mosquitto).
-   * Crie ou edite o arquivo mosquitto.conf adicionando:
+Para que os dois ESP32 conversem, é necessário configurar o endereço do servidor e liberar o acesso externo no PC:
+
+### 1. Configurar o Mosquitto (Permitir acesso externo)
+1. Vá à pasta de instalação (ex: `C:\Program Files\mosquitto`).
+2. Crie ou edite o arquivo `mosquitto.conf` adicionando:
+   ```text
+   listener 1883
+   allow_anonymous true
    ```
-     text
-     listener 1883
-     allow_anonymous true
-    ```
-     
-   * Rode o broker pelo terminal: 
-   ```
+3. Rode o broker pelo terminal (Admin):
+   ```cmd
    mosquitto -c mosquitto.conf -v
    ```
 
-2. *Firewall:*
-   * Abra a porta *1883* no Firewall do Windows (Entrada) ou desative-o temporariamente.
-
-3. *Configurar o IP:*
-   * No código, localize a linha 
-   ```
-   #define BROKER_URI.
-   ```
-   * Substitua pelo IPv4 do seu computador (verifique com o comando ipconfig no terminal).
-   * *Atenção:* Os dispositivos devem estar na mesma rede Wi-Fi.
+### 2. Firewall e IP
+1. **Firewall:** Abra a porta **1883** no Firewall do Windows (Entrada) ou desative-o temporariamente.
+2. **Configurar o IP:** No código `main.c`, localize a linha `#define BROKER_URI` e substitua pelo IPv4 do seu computador.
 
 ---
 
-## Como Executar
+## 🚀 Como Executar
 
-### Opção 1: Com duas placas ESP32
-
-1. *Configurar o Wi-Fi (Menuconfig):*
-   * Abra o terminal do ESP-IDF e digite: 
+### Passo 1: Gravar a Placa A (Este Repositório)
+1. Configure o Wi-Fi: `idf.py menuconfig` -> *Example Connection Configuration*.
+2. Compile e grave:
+   ```bash
+   idf.py -p (PORTA_USB) flash monitor
    ```
-   idf.py menuconfig
+
+### Passo 2: Gravar a Placa B (Outro Repositório)
+1. Baixe o código do repositório complementar (link no topo).
+2. Configure o Wi-Fi e o IP nele também.
+3. Grave na segunda placa.
+
+---
+
+## 🧪 Teste Prático (Com Duas Placas)
+
+Com ambos os códigos gravados e as placas ligadas (alimentadas via USB):
+
+1. **Verificação Inicial:**
+   * Certifique-se de que ambas as placas conectaram ao Wi-Fi e ao Broker MQTT (o LED da placa pode piscar ou você pode verificar via monitor serial se aparece `MQTT_EVENT_CONNECTED`).
+
+2. **Teste A -> B:**
+   * Pressione o botão na **Placa A**.
+   * O LED na **Placa B** deve acender **instantaneamente**.
+   * Solte o botão na **Placa A**. O LED na **Placa B** deve apagar.
+
+3. **Teste B -> A:**
+   * Pressione o botão na **Placa B**.
+   * O LED na **Placa A** deve acender **instantaneamente**.
+
+---
+
+## 💻 Simulação (Caso tenha apenas 1 Placa)
+
+Se você tiver apenas este código gravado em uma placa física, use o PC para simular a segunda placa:
+
+1. **Para ver o botão desta placa:**
+   ```cmd
+   mosquitto_sub -h localhost -t "esp32/tp2" -v
    ```
-   * Navegue até a opção: *Example Connection Configuration*.
-   * Em *WiFi SSID*, digite o nome da sua rede (apenas redes 2.4GHz).
-   * Em *WiFi Password*, digite a senha da rede.
-   * Pressione S para salvar e Esc (ou Q) para sair.
+   *Ao apertar o botão na placa, a mensagem aparece aqui.*
 
-2. *Upload:*
-   * Compile e faça o upload para a *Placa A*:
-        ```
-         idf.py -p (PORTA_USB_1) flash monitor
-        ```
-     
-   * Faça o upload para a *Placa B* (em outra porta):
-     ```
-     idf.py -p (PORTA_USB_2) flash monitor
-     ```
-     
-
-3. *Teste:*
-   * Pressione o botão na *Placa A* e observe o LED acender na *Placa B* (e vice-versa).
-
-### Opção 2: Com apenas uma placa + Cliente MQTT (PC ou Celular)
-Caso não possua duas placas, você pode simular a segunda usando um software (ex: *MQTTX* no PC ou *MyMQTT* no celular).
-
-1. Faça o upload do código para o seu ESP32 (configurando o Wi-Fi como explicado acima).
-2. Mantenha o Mosquitto rodando no PC.
-3. *Para acender o LED físico do ESP32 remotamente:*
-   * Publique a mensagem on no tópico esp32/led (via terminal: mosquitto_pub -h localhost -t "esp32/led" -m "on").
-   * O ESP32 receberá o comando e acenderá o LED.
-4. *Para monitorar o botão físico do ESP32:*
-   * Inscreva-se no tópico esp32/button (via terminal: mosquitto_sub -h localhost -t "esp32/button" -v).
-   * Ao pressionar o botão físico no ESP32, você verá a mensagem chegar no PC instantaneamente.
+2. **Para acender o LED desta placa:**
+   ```cmd
+   mosquitto_pub -h localhost -t "esp32/tp1" -m "off"
+   ```
+   *O LED da placa deve acender.*
